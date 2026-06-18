@@ -1,0 +1,22 @@
+# Git hooks via lefthook (https://lefthook.dev). Install with: lefthook install
+# Hooks run on staged Go files; golangci-lint is skipped gracefully if absent.
+pre-commit:
+  parallel: true
+  commands:
+    fmt:
+      glob: "*.go"
+      run: test -z "$(gofmt -l {staged_files})" || { echo "gofmt needed:"; gofmt -l {staged_files}; exit 1; }
+    vet:
+      glob: "*.go"
+      run: go vet ./...
+    lint:
+      glob: "*.go"
+      run: if command -v golangci-lint >/dev/null 2>&1; then golangci-lint run; else echo "golangci-lint not installed, skipping (CI will enforce)"; fi
+    test:
+      glob: "*.go"
+      run: go test ./...
+
+pre-push:
+  commands:
+    test-race:
+      run: go test -race ./...

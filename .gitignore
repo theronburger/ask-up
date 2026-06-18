@@ -1,0 +1,5 @@
+/dist/
+/ask-up
+/ask-up.exe
+*.out
+.DS_Store
