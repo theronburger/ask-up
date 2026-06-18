@@ -28,11 +28,23 @@ ttl        = "5m"
 
 ## 3. Wire the API key (do not write it to a file)
 
-`ask-up` reads `ANTHROPIC_API_KEY` (or `ANTHROPIC_AUTH_TOKEN`) from the environment. Per policy the key must come from 1Password, not a file. Add a line like this to the user's shell profile (confirm the exact 1Password item path with them):
+`ask-up` never stores secrets. It resolves the key at runtime in this order: `ANTHROPIC_API_KEY`, then `ANTHROPIC_AUTH_TOKEN`, then the `api_key_command` in the config. It is password-manager-agnostic; the requirement is only that the secret comes from a manager at runtime and is never written to disk.
+
+Ask the user which secrets manager their org uses (1Password, AWS Secrets Manager, HashiCorp Vault, `pass`, Doppler, etc.) and which credential applies. Then wire whichever option fits; both keep the key off disk:
+
+**Option A: export from their manager** in their shell profile. Substitute their tool's read command:
 
 ```sh
-export ANTHROPIC_API_KEY="$(op read 'op://Private/Anthropic API/credential')"
+export ANTHROPIC_API_KEY="$(<their-manager-read-command>)"
 ```
+
+**Option B: fetch on demand** (no long-lived exported key). Put the command in `~/.ask-up/config.toml`:
+
+```toml
+api_key_command = "<their-manager-read-command>"
+```
+
+Do not paste the raw key anywhere. If the user does not know their manager, help them identify it (`which op vault pass doppler aws gcloud 2>/dev/null`, or ask their team) before wiring.
 
 Then verify end to end with a probe (this makes a real call):
 

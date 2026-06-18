@@ -71,6 +71,23 @@ func TestAsk(t *testing.T) {
 	}
 }
 
+func TestRunSecretCommand(t *testing.T) {
+	got, err := runSecretCommand("printf 'sk-test-123'")
+	if err != nil {
+		t.Fatalf("runSecretCommand: %v", err)
+	}
+	if got != "sk-test-123" {
+		t.Errorf("got %q, want sk-test-123", got)
+	}
+
+	if _, err := runSecretCommand("true"); err == nil {
+		t.Error("expected error when command produces no output")
+	}
+	if _, err := runSecretCommand("exit 7"); err == nil {
+		t.Error("expected error when command fails")
+	}
+}
+
 func TestEffortMapping(t *testing.T) {
 	cases := map[string]string{
 		"low": "low", "medium": "medium", "high": "high",

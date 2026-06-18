@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -36,7 +37,10 @@ func (r Result) PrefixTokens() int64 {
 // the assistant's reply. The API key is resolved by the SDK from
 // ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN, when set).
 func Ask(ctx context.Context, cfg config.Config, history []store.Message, question string) (Result, error) {
-	client := newClient(cfg)
+	client, err := newClient(cfg)
+	if err != nil {
+		return Result{}, err
+	}
 
 	cc := anthropic.NewCacheControlEphemeralParam()
 	if cfg.TTLDuration() == time.Hour {
@@ -88,17 +92,46 @@ func Ask(ctx context.Context, cfg config.Config, history []store.Message, questi
 	}, nil
 }
 
-func newClient(cfg config.Config) anthropic.Client {
+// newClient resolves credentials in a password-manager-agnostic way. The order
+// is: explicit env vars first (ad-hoc override / CI), then a configured fetch
+// command. The secret never has to live in a file or a long-lived export.
+func newClient(cfg config.Config) (anthropic.Client, error) {
 	var opts []option.RequestOption
 	if cfg.BaseURL != "" {
 		opts = append(opts, option.WithBaseURL(cfg.BaseURL))
 	}
-	// SDK reads ANTHROPIC_API_KEY automatically; wire an auth token explicitly
-	// if that's the enterprise credential in use.
-	if tok := os.Getenv("ANTHROPIC_AUTH_TOKEN"); tok != "" {
-		opts = append(opts, option.WithAuthToken(tok))
+
+	switch {
+	case os.Getenv("ANTHROPIC_API_KEY") != "":
+		// SDK reads ANTHROPIC_API_KEY automatically; nothing to add.
+	case os.Getenv("ANTHROPIC_AUTH_TOKEN") != "":
+		opts = append(opts, option.WithAuthToken(os.Getenv("ANTHROPIC_AUTH_TOKEN")))
+	case cfg.APIKeyCommand != "":
+		key, err := runSecretCommand(cfg.APIKeyCommand)
+		if err != nil {
+			return anthropic.Client{}, err
+		}
+		opts = append(opts, option.WithAPIKey(key))
 	}
-	return anthropic.NewClient(opts...)
+	// If none matched, the SDK surfaces a clear missing-credential error on use.
+
+	return anthropic.NewClient(opts...), nil
+}
+
+// runSecretCommand runs a user-configured command and returns its trimmed
+// stdout as the API key. The command comes from the user's own config file, so
+// it runs in the same trust boundary as their shell. Errors are reported
+// without echoing the command's stderr, so secrets can't leak into logs.
+func runSecretCommand(command string) (string, error) {
+	out, err := exec.Command("sh", "-c", command).Output()
+	if err != nil {
+		return "", fmt.Errorf("api_key_command failed: %w", err)
+	}
+	key := strings.TrimSpace(string(out))
+	if key == "" {
+		return "", fmt.Errorf("api_key_command produced no output")
+	}
+	return key, nil
 }
 
 func effort(s string) anthropic.OutputConfigEffort {

@@ -1,6 +1,7 @@
 // Package config loads ask-up settings from ~/.ask-up/config.toml (overridable
 // via ASK_UP_HOME), layered on top of sensible defaults. Secrets never live
-// here: the Anthropic API key is read from the environment by the SDK.
+// here: the API key is read from the environment, or fetched at runtime via the
+// configured api_key_command (the config stores the command, not the secret).
 package config
 
 import (
@@ -21,13 +22,14 @@ const DefaultSystem = `You are a senior engineer being consulted by another AI a
 
 // Config holds non-secret settings. Field names map to TOML keys.
 type Config struct {
-	Model        string `toml:"model"`         // target ("up") model id
-	Effort       string `toml:"effort"`        // low|medium|high|xhigh|max
-	TTL          string `toml:"ttl"`           // "5m" or "1h": cache breakpoint TTL
-	WarmthWindow string `toml:"warmth_window"` // duration; empty => derived from TTL
-	BaseURL      string `toml:"base_url"`      // optional enterprise gateway
-	System       string `toml:"system"`        // override the consult system prompt
-	MaxTokens    int64  `toml:"max_tokens"`    // response cap
+	Model         string `toml:"model"`           // target ("up") model id
+	Effort        string `toml:"effort"`          // low|medium|high|xhigh|max
+	TTL           string `toml:"ttl"`             // "5m" or "1h": cache breakpoint TTL
+	WarmthWindow  string `toml:"warmth_window"`   // duration; empty => derived from TTL
+	BaseURL       string `toml:"base_url"`        // optional enterprise gateway
+	System        string `toml:"system"`          // override the consult system prompt
+	MaxTokens     int64  `toml:"max_tokens"`      // response cap
+	APIKeyCommand string `toml:"api_key_command"` // optional: shell command whose stdout is the API key
 }
 
 // Default returns the baseline configuration used when no file is present and

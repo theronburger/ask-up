@@ -22,18 +22,35 @@ go install github.com/theronburger/ask-up@latest
 
 ## Authentication
 
-`ask-up` reads the key from the environment; it never writes secrets to disk. Set one of:
+`ask-up` is password-manager-agnostic. It never stores a secret; it only needs the key at runtime, resolved in this order:
 
-- `ANTHROPIC_API_KEY` (the standard path; works with enterprise keys)
-- `ANTHROPIC_AUTH_TOKEN` (used automatically when set)
+1. `ANTHROPIC_API_KEY` from the environment (standard path; works with enterprise keys)
+2. `ANTHROPIC_AUTH_TOKEN` from the environment (for gateway/token auth)
+3. `api_key_command` from the config file: any command whose stdout is the key
 
-Per house policy, source the key from 1Password rather than hardcoding it, for example in your shell profile:
+The security properties that matter do not depend on which vault you use: keep the secret in a manager, get it into the process at runtime, and never write it to a file. `ask-up`'s config holds only the *command*, never the key.
+
+**Option A: export from your manager** in your shell profile. Any tool that prints the secret works:
 
 ```sh
-export ANTHROPIC_API_KEY="$(op read 'op://Private/Anthropic API/credential')"
+export ANTHROPIC_API_KEY="$(op read 'op://Vault/Anthropic/credential')"   # 1Password
+export ANTHROPIC_API_KEY="$(pass anthropic/api-key)"                       # pass
+export ANTHROPIC_API_KEY="$(aws secretsmanager get-secret-value --secret-id anthropic --query SecretString --output text)"
+export ANTHROPIC_API_KEY="$(vault kv get -field=key secret/anthropic)"     # HashiCorp Vault
+export ANTHROPIC_API_KEY="$(doppler secrets get ANTHROPIC_API_KEY --plain)"
 ```
 
-For an enterprise gateway, set `base_url` in the config file (below).
+**Option B: let `ask-up` fetch it on demand** (no long-lived exported key). Put the fetch command in `~/.ask-up/config.toml`:
+
+```toml
+api_key_command = "op read 'op://Vault/Anthropic/credential'"
+```
+
+`ask-up` runs it per call and uses the output as the key. Latency is negligible next to the model call, and the secret only ever lives in the short-lived process's memory. The command runs in your shell's trust boundary; on failure `ask-up` reports it without echoing the command's stderr, so secrets do not leak into logs.
+
+If you do not know which manager your org uses, you do not need to: pick whichever of A/B fits, point it at your org's tool, and the key never touches disk either way.
+
+For an enterprise gateway, also set `base_url` in the config (below).
 
 ## Usage
 
@@ -71,7 +88,8 @@ ttl           = "5m"               # cache breakpoint TTL: "5m" or "1h"
 warmth_window = ""                 # duration override; default is ttl minus 10s
 base_url      = ""                 # optional enterprise gateway
 max_tokens    = 8192               # response cap
-# system      = "..."              # override the consult instruction
+# system          = "..."          # override the consult instruction
+# api_key_command = "..."          # fetch the key at runtime (see Authentication)
 ```
 
 ## Claude Code integration

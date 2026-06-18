@@ -10,3 +10,10 @@ max_tokens    = 8192               # response token cap
 
 # Override the consult instruction sent to the upstream model:
 # system = "You are a senior engineer being consulted by another agent..."
+
+# Fetch the API key at runtime from any password manager, so no key is ever
+# exported or written to disk. ask-up runs this command and uses its stdout as
+# the key. Used only when ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN are unset.
+# api_key_command = "op read 'op://Vault/Anthropic/credential'"   # 1Password
+# api_key_command = "pass anthropic/api-key"                       # pass
+# api_key_command = "vault kv get -field=key secret/anthropic"     # HashiCorp Vault
