@@ -1,6 +1,6 @@
 module github.com/theronburger/ask-up
 
-go 1.26.4
+go 1.24
 
 require (
 	github.com/BurntSushi/toml v1.6.0

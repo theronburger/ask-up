@@ -80,10 +80,11 @@ func listCmd(st *store.Store, cfg config.Config) error {
 	now := time.Now()
 	window := cfg.WarmthWindowDuration()
 	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "ID\tAGE\tSTATE\tMODEL\tLABEL")
+	// Intermediate writes buffer into the tabwriter; the real error surfaces on Flush.
+	_, _ = fmt.Fprintln(tw, "ID\tAGE\tSTATE\tMODEL\tLABEL")
 	for _, c := range cs {
 		w := c.Assess(now, config.FloorFor(c.Model), window)
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
 			c.ID, w.Age.Round(time.Second), state(w), c.Model, c.Label)
 	}
 	return tw.Flush()

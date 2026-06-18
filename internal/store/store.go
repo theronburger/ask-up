@@ -75,9 +75,9 @@ func NewID() string {
 // Label derives a short, single-line label from the first question.
 func Label(question string) string {
 	s := strings.Join(strings.Fields(question), " ")
-	const max = 60
-	if len(s) > max {
-		return s[:max-1] + "…"
+	const maxLen = 60
+	if len(s) > maxLen {
+		return s[:maxLen-1] + "…"
 	}
 	return s
 }

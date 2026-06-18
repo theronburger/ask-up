@@ -14,7 +14,7 @@ func TestNewIDFormat(t *testing.T) {
 	if len(id) != len("cns_")+8 {
 		t.Errorf("id %q wrong length", id)
 	}
-	if NewID() == NewID() {
+	if a, b := NewID(), NewID(); a == b {
 		t.Error("NewID returned duplicate ids")
 	}
 }
