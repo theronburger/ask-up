@@ -51,7 +51,8 @@ type claudeOutput struct {
 func Ask(ctx context.Context, cfg config.Config, sessionID, prompt string) (Result, error) {
 	cmd := exec.CommandContext(ctx, cfg.ClaudeBin, buildArgs(cfg, sessionID)...)
 	cmd.Stdin = strings.NewReader(prompt)
-	cmd.Env = childEnv(cfg)
+	// The child inherits this process's environment (cmd.Env left nil), including
+	// CLAUDE_CONFIG_DIR, so the advisor runs under the caller's Claude account.
 	// Run from a neutral directory so no project CLAUDE.md leaks into context.
 	cmd.Dir = os.TempDir()
 
@@ -110,14 +111,4 @@ func buildArgs(cfg config.Config, sessionID string) []string {
 		args = append(args, "--resume", sessionID)
 	}
 	return args
-}
-
-// childEnv selects the Claude Code account for the child via CLAUDE_CONFIG_DIR
-// when configured, inheriting the rest of the environment.
-func childEnv(cfg config.Config) []string {
-	env := os.Environ()
-	if cfg.ConfigDir != "" {
-		env = append(env, "CLAUDE_CONFIG_DIR="+cfg.ConfigDir)
-	}
-	return env
 }

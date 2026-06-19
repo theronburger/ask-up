@@ -21,25 +21,18 @@ Also confirm Claude Code is installed and logged in: `claude --version`, and tha
 
 Only set it if the step-5 probe later fails to find or run `claude` (for example, if `PATH`'s `claude` is itself a wrapper *script*). Find the real path with `ls -l ~/.local/bin/claude`.
 
-## 3. Account (inherits the caller by default)
+## 3. Account (nothing to configure)
 
-By default `ask-up` consults the **same account as the calling agent**: it passes through `CLAUDE_CONFIG_DIR`, so a work-profile agent consults work and a personal one consults personal. This is almost always what you want, so leave `config_dir` unset.
-
-Set `config_dir` only to pin a specific account regardless of caller. If the user wants that, find the profile dir and use it (pinning works only if that account is logged in):
-
-```sh
-ls -d ~/.claude* 2>/dev/null
-```
+`ask-up` consults whatever account the calling Claude Code session uses (it inherits `CLAUDE_CONFIG_DIR`): a work session consults work, a personal one consults personal. It does not switch accounts. If the user runs multiple accounts, that's theirs to manage by which session they call from.
 
 ## 4. Write the config (only if you need non-defaults)
 
-If the defaults fit (model `opus`, inherit the account, `claude` on `PATH`), you can skip the config file entirely. Otherwise create `~/.ask-up/config.toml` with just the keys you want to change:
+If the defaults fit (model `opus`, `claude` on `PATH`), you can skip the config file entirely. Otherwise create `~/.ask-up/config.toml` with just the keys you want to change:
 
 ```toml
 model  = "opus"     # or a specific id, e.g. "claude-opus-4-8"
 effort = "xhigh"    # low | medium | high | xhigh | max
 
-# config_dir = "/Users/<you>/.claude-work"       # pin a specific account (default: inherit the caller)
 # claude_bin = "/Users/<you>/.local/bin/claude"  # only if the probe can't find or run claude
 ```
 

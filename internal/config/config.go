@@ -24,8 +24,7 @@ type Config struct {
 	Model     string `toml:"model"`      // Claude Code model alias/id (default "opus")
 	Effort    string `toml:"effort"`     // reasoning effort: low|medium|high|xhigh|max (default "xhigh")
 	System    string `toml:"system"`     // advisor system prompt
-	ClaudeBin string `toml:"claude_bin"` // path to the real claude binary (bypasses shell wrappers)
-	ConfigDir string `toml:"config_dir"` // CLAUDE_CONFIG_DIR for the child (selects the account); empty = inherit
+	ClaudeBin string `toml:"claude_bin"` // path to the claude binary (default "claude" on PATH)
 }
 
 // Default returns the baseline configuration. Effort defaults to xhigh: a notch

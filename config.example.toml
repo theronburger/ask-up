@@ -4,8 +4,7 @@
 
 model      = "opus"     # Claude Code model alias or id (e.g. "opus", "claude-opus-4-8")
 effort     = "xhigh"    # reasoning effort: low | medium | high | xhigh | max
-claude_bin = "claude"   # path to the real claude binary; set absolute if a shell alias/wrapper shadows it
-config_dir = ""         # CLAUDE_CONFIG_DIR for the advisor (which account); empty = inherit the active profile
+claude_bin = "claude"   # path to the claude binary; set absolute only if claude isn't on PATH
 
 # Override the advisor system prompt:
 # system = "You are a senior advisor being consulted by another Claude agent..."

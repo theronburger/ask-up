@@ -48,16 +48,15 @@ Optional file at `~/.ask-up/config.toml` (override the directory with `ASK_UP_HO
 ```toml
 model      = "opus"     # Claude Code model alias or id (e.g. "opus", "claude-opus-4-8")
 effort     = "xhigh"    # reasoning effort: low | medium | high | xhigh | max
-claude_bin = "claude"   # path to the real claude binary; set an absolute path if a shell alias/wrapper shadows it
-config_dir = ""         # CLAUDE_CONFIG_DIR for the advisor; selects which account (empty = inherit the current one)
+claude_bin = "claude"   # path to the claude binary; set absolute only if claude isn't on PATH
 # system   = "..."      # override the advisor system prompt
 ```
 
-**Account.** By default `ask-up` runs under the **same Claude account as the calling agent**: it inherits `CLAUDE_CONFIG_DIR`, so a work-profile agent consults the work account and a personal one consults personal, with no configuration. Set `config_dir` only to pin a specific account regardless of caller.
+**Account.** `ask-up` runs under whatever account the calling Claude Code session uses: it inherits `CLAUDE_CONFIG_DIR` and doesn't switch accounts. A work session consults work, a personal one consults personal. If you run multiple accounts, you control which answers by which session you call from (see [Multiple accounts](#multiple-accounts)).
 
 **Effort.** Defaults to `xhigh` (a notch above the standard `high`, since this is for hard calls); override per-call with `-effort low|medium|high|xhigh|max`. Setting it explicitly means the advisor's effort is deliberate rather than inherited from the caller.
 
-**Binary.** `claude_bin` matters if you wrap `claude` with a shell function/alias for profile switching: point it at the real binary (often `~/.local/bin/claude`) so `ask-up` bypasses the wrapper. (Go's exec already skips shell functions, so plain `claude` usually resolves correctly.)
+**Binary.** Plain `claude` is resolved on `PATH`, and Go's exec skips shell aliases/functions, so a profile wrapper doesn't interfere. Set `claude_bin` to an absolute path only if `claude` isn't on `PATH` (or `PATH`'s `claude` is itself a wrapper script).
 
 ## Multiple accounts
 

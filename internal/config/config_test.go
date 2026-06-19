@@ -36,7 +36,7 @@ func TestLoadMissingFileReturnsDefaults(t *testing.T) {
 func TestLoadOverlay(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("ASK_UP_HOME", home)
-	body := "model = \"claude-opus-4-8\"\nconfig_dir = \"/Users/x/.claude-work\"\nclaude_bin = \"/opt/claude\"\n"
+	body := "model = \"claude-opus-4-8\"\nclaude_bin = \"/opt/claude\"\n"
 	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -46,9 +46,6 @@ func TestLoadOverlay(t *testing.T) {
 	}
 	if cfg.Model != "claude-opus-4-8" {
 		t.Errorf("model = %q, want overlaid value", cfg.Model)
-	}
-	if cfg.ConfigDir != "/Users/x/.claude-work" {
-		t.Errorf("config_dir = %q", cfg.ConfigDir)
 	}
 	if cfg.ClaudeBin != "/opt/claude" {
 		t.Errorf("claude_bin = %q", cfg.ClaudeBin)
