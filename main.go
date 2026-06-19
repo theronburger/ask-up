@@ -1,19 +1,17 @@
-// Command ask-up escalates a single question to a more capable ("up") model and
-// prints the answer, persisting the exchange as a resumable consultation.
+// Command ask-up escalates a question to a more capable model by driving the
+// local Claude Code CLI in print mode, and prints the answer. It persists each
+// exchange as a resumable consultation (a Claude Code session).
 //
 // Usage:
 //
 //	ask-up "question"                       quick one-liner
 //	ask-up <<'EOF' ...curated brief... EOF  compose a fuller prompt on stdin
 //	ask-up -continue cns_x "follow-up"      continue an existing consultation
-//	ask-up -continue cns_x -force "..."     revive one past its cache window
 //	ask-up -list                            list saved consultations
-//	ask-up -v "question"                    also print token/cache usage
+//	ask-up -v "question"                    also print token/session info
 //
 // The prompt comes from stdin when piped, otherwise from the positional
-// arguments. Piping (a quoted heredoc) is the right path for anything with
-// code, quotes, or newlines: it needs no shell escaping. Flags must precede
-// the question (Go's flag package stops at the first non-flag argument).
+// arguments. Flags must precede the question.
 package main
 
 import (
@@ -38,35 +36,21 @@ var (
 	date    = "unknown"
 )
 
-// exitCodeColdCache is returned when the warmth guard blocks a -continue.
-const exitCodeColdCache = 3
-
 func main() {
 	if err := run(os.Args[1:]); err != nil {
-		var ce coldCacheError
-		if errors.As(err, &ce) {
-			fmt.Fprint(os.Stderr, ce.message)
-			os.Exit(exitCodeColdCache)
-		}
 		fmt.Fprintln(os.Stderr, "ask-up: "+err.Error())
 		os.Exit(1)
 	}
 }
 
-// coldCacheError signals the warmth guard tripped; main maps it to a distinct
-// exit code so callers can tell "cold, re-run with -force" from a real failure.
-type coldCacheError struct{ message string }
-
-func (e coldCacheError) Error() string { return "consultation cache is cold" }
-
 func run(args []string) error {
 	fs := flag.NewFlagSet("ask-up", flag.ContinueOnError)
 	var (
 		cont        = fs.String("continue", "", "continue an existing consultation by id")
-		force       = fs.Bool("force", false, "revive a consultation even if its cache has likely expired")
-		verbose     = fs.Bool("v", false, "print token and cache usage to stderr")
+		verbose     = fs.Bool("v", false, "print token usage and session id to stderr")
 		list        = fs.Bool("list", false, "list saved consultations and exit")
-		modelFlag   = fs.String("model", "", "override the configured target model (ignored with -continue)")
+		modelFlag   = fs.String("model", "", "override the configured model (ignored with -continue)")
+		effortFlag  = fs.String("effort", "", "reasoning effort: low|medium|high|xhigh|max (default from config)")
 		showVersion = fs.Bool("version", false, "print version and exit")
 	)
 	fs.Usage = func() { usage(fs) }
@@ -86,6 +70,9 @@ func run(args []string) error {
 	if *modelFlag != "" {
 		cfg.Model = *modelFlag
 	}
+	if *effortFlag != "" {
+		cfg.Effort = *effortFlag
+	}
 
 	st, err := store.New(config.Home())
 	if err != nil {
@@ -93,56 +80,75 @@ func run(args []string) error {
 	}
 
 	if *list {
-		return listCmd(st, cfg)
+		return listCmd(st)
 	}
 
 	stdinData, err := readStdin()
 	if err != nil {
 		return fmt.Errorf("reading stdin: %w", err)
 	}
-	question, err := resolveBody(stdinData, fs.Args())
+	prompt, err := resolveBody(stdinData, fs.Args())
 	if err != nil {
 		usage(fs)
 		return err
 	}
 
-	c, err := resolveConsultation(st, cfg, *cont, *force, question)
+	c, resumeID := resolveConsultation(st, &cfg, *cont, prompt)
+	if c == nil {
+		return fmt.Errorf("loading %s: not found", *cont)
+	}
+
+	res, err := consult.Ask(context.Background(), cfg, resumeID, prompt)
 	if err != nil {
 		return err
 	}
 
-	res, err := consult.Ask(context.Background(), cfg, c.Messages, question)
-	if err != nil {
-		return err
+	if res.SessionID != "" {
+		c.SessionID = res.SessionID
 	}
-
-	c.Messages = append(c.Messages,
-		store.Message{Role: "user", Text: question},
-		store.Message{Role: "assistant", Text: res.Answer},
-	)
 	c.LastUsed = time.Now()
-	c.PrefixTokens = res.PrefixTokens()
 	if err := st.Save(c); err != nil {
 		return fmt.Errorf("saving consultation: %w", err)
 	}
 
 	fmt.Println(res.Answer)
-	printFooter(c, cfg)
+	printFooter(c)
 	if *verbose {
-		printUsage(c, cfg, res)
+		printUsage(c, res)
 	}
 	return nil
 }
 
-// readStdin returns piped/redirected stdin. It skips an interactive terminal so
+// resolveConsultation loads the consultation to continue (resuming its Claude
+// Code session) or creates a fresh one. Returns the consultation and the
+// session id to resume (empty for a new consultation). A nil consultation means
+// the requested -continue id was not found.
+func resolveConsultation(st *store.Store, cfg *config.Config, cont, prompt string) (*store.Consultation, string) {
+	if cont == "" {
+		return &store.Consultation{
+			ID:        store.NewID(),
+			Label:     store.Label(prompt),
+			Model:     cfg.Model,
+			CreatedAt: time.Now(),
+		}, ""
+	}
+	c, err := st.Load(cont)
+	if err != nil {
+		return nil, ""
+	}
+	cfg.Model = c.Model // keep the resumed session on its original model
+	return c, c.SessionID
+}
+
+// readStdin returns piped/redirected stdin, skipping an interactive terminal so
 // it never blocks waiting for input that isn't coming.
 func readStdin() (string, error) {
 	stat, err := os.Stdin.Stat()
 	if err != nil {
-		return "", nil // can't stat; treat as no stdin rather than fail
+		return "", nil
 	}
 	if stat.Mode()&os.ModeCharDevice != 0 {
-		return "", nil // interactive terminal, nothing piped
+		return "", nil
 	}
 	data, err := io.ReadAll(os.Stdin)
 	if err != nil {
@@ -161,28 +167,4 @@ func resolveBody(stdinData string, args []string) (string, error) {
 		return q, nil
 	}
 	return "", errors.New("no prompt provided (pipe one via stdin or pass it as an argument)")
-}
-
-// resolveConsultation loads the consultation to continue (applying the warmth
-// guard) or creates a fresh one.
-func resolveConsultation(st *store.Store, cfg config.Config, cont string, force bool, question string) (*store.Consultation, error) {
-	if cont == "" {
-		return &store.Consultation{
-			ID:        store.NewID(),
-			Label:     store.Label(question),
-			Model:     cfg.Model,
-			CreatedAt: time.Now(),
-		}, nil
-	}
-
-	c, err := st.Load(cont)
-	if err != nil {
-		return nil, fmt.Errorf("loading %s: %w", cont, err)
-	}
-
-	w := c.Assess(time.Now(), config.FloorFor(c.Model), cfg.WarmthWindowDuration())
-	if w.Cacheable && !w.Warm && !force {
-		return nil, coldCacheError{message: warmthWarning(c, w)}
-	}
-	return c, nil
 }

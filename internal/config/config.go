@@ -1,7 +1,7 @@
 // Package config loads ask-up settings from ~/.ask-up/config.toml (overridable
-// via ASK_UP_HOME), layered on top of sensible defaults. Secrets never live
-// here: the API key is read from the environment, or fetched at runtime via the
-// configured api_key_command (the config stores the command, not the secret).
+// via ASK_UP_HOME), layered on defaults. ask-up wraps the local Claude Code CLI
+// in print mode, so there are no API keys or endpoints here: authentication is
+// whatever the chosen Claude Code profile already uses.
 package config
 
 import (
@@ -9,38 +9,33 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
-	"time"
 
 	"github.com/BurntSushi/toml"
 )
 
-// DefaultSystem is the instruction given to the upstream model. It frames the
-// call as a peer escalation and asks for a committed recommendation rather than
-// an exhaustive survey.
-const DefaultSystem = `You are a senior engineer being consulted by another AI agent that is mid-task and has hit a point of genuine uncertainty. Answer the specific question directly and precisely. Commit to a recommendation rather than listing every option; if you must weigh alternatives, say which you would pick and why. If the question is underspecified, state the single most reasonable assumption and answer under it rather than asking for clarification. Lead with the answer, then the reasoning. Be concise.`
+// DefaultSystem is the advisor persona handed to the upstream model. It frames
+// the call as a one-shot consultation from another Claude agent.
+const DefaultSystem = `You are a senior advisor being consulted by another Claude agent that is working on a task and has escalated a question because it hit something it is unsure about. You are the more capable model; give it a clear, correct, decisive answer.
 
-// Config holds non-secret settings. Field names map to TOML keys.
+Be concise but complete: cover what matters and cut what doesn't. Do not assume an ongoing conversation and do not end by inviting follow-ups; aim to fully resolve the question in this one response. Only ask a clarifying question if the question genuinely cannot be answered without it; otherwise state the assumption you are making and answer under it. Lead with the answer, then the essential reasoning, and commit to a recommendation rather than listing every option.`
+
+// Config holds the (few) settings. Field names map to TOML keys.
 type Config struct {
-	Model         string `toml:"model"`           // target ("up") model id
-	Effort        string `toml:"effort"`          // low|medium|high|xhigh|max
-	TTL           string `toml:"ttl"`             // "5m" or "1h": cache breakpoint TTL
-	WarmthWindow  string `toml:"warmth_window"`   // duration; empty => derived from TTL
-	BaseURL       string `toml:"base_url"`        // optional enterprise gateway
-	System        string `toml:"system"`          // override the consult system prompt
-	MaxTokens     int64  `toml:"max_tokens"`      // response cap
-	APIKeyCommand string `toml:"api_key_command"` // optional: shell command whose stdout is the API key
+	Model     string `toml:"model"`      // Claude Code model alias/id (default "opus")
+	Effort    string `toml:"effort"`     // reasoning effort: low|medium|high|xhigh|max (default "xhigh")
+	System    string `toml:"system"`     // advisor system prompt
+	ClaudeBin string `toml:"claude_bin"` // path to the real claude binary (bypasses shell wrappers)
+	ConfigDir string `toml:"config_dir"` // CLAUDE_CONFIG_DIR for the child (selects the account); empty = inherit
 }
 
-// Default returns the baseline configuration used when no file is present and
-// for any field a config file leaves unset.
+// Default returns the baseline configuration. Effort defaults to xhigh: a notch
+// above the standard "high", since ask-up is for the hard, escalated calls.
 func Default() Config {
 	return Config{
-		Model:     "claude-opus-4-8",
-		Effort:    "high",
-		TTL:       "5m",
-		MaxTokens: 8192,
+		Model:     "opus",
+		Effort:    "xhigh",
 		System:    DefaultSystem,
+		ClaudeBin: "claude",
 	}
 }
 
@@ -74,49 +69,14 @@ func Load() (Config, error) {
 	if cfg.System == "" {
 		cfg.System = DefaultSystem
 	}
+	if cfg.Model == "" {
+		cfg.Model = "opus"
+	}
+	if cfg.Effort == "" {
+		cfg.Effort = "xhigh"
+	}
+	if cfg.ClaudeBin == "" {
+		cfg.ClaudeBin = "claude"
+	}
 	return cfg, nil
-}
-
-// TTLDuration parses the configured TTL ("5m"/"1h"). Unknown values fall back
-// to 5 minutes, matching the API-key default.
-func (c Config) TTLDuration() time.Duration {
-	switch strings.ToLower(strings.TrimSpace(c.TTL)) {
-	case "1h":
-		return time.Hour
-	default:
-		return 5 * time.Minute
-	}
-}
-
-// WarmthWindowDuration is how long after last use a consultation is still
-// assumed cache-warm. An explicit warmth_window wins; otherwise it's the TTL
-// minus a 10s safety buffer, so we declare "cold" before the real expiry.
-func (c Config) WarmthWindowDuration() time.Duration {
-	if c.WarmthWindow != "" {
-		if d, err := time.ParseDuration(c.WarmthWindow); err == nil {
-			return d
-		}
-	}
-	if w := c.TTLDuration() - 10*time.Second; w > 0 {
-		return w
-	}
-	return c.TTLDuration()
-}
-
-// FloorFor returns the minimum prefix size (in tokens) at which prompt caching
-// engages for a model. Below it the cache_control marker is silently ignored,
-// so the warmth guard does not apply. Unknown models get the conservative
-// 4096-token Opus-tier floor.
-func FloorFor(model string) int64 {
-	m := strings.ToLower(model)
-	switch {
-	case strings.Contains(m, "sonnet-4-6"), strings.Contains(m, "fable-5"),
-		strings.Contains(m, "mythos-5"), strings.Contains(m, "haiku-3"):
-		return 2048
-	case strings.Contains(m, "sonnet-4-5"), strings.Contains(m, "sonnet-4-0"),
-		strings.Contains(m, "sonnet-3-7"):
-		return 1024
-	default:
-		return 4096
-	}
 }

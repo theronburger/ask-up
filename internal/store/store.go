@@ -1,6 +1,7 @@
-// Package store persists consultations as JSON files under the ask-up home
-// directory. Each consultation is one Opus thread that the calling agent can
-// continue, with enough metadata to judge cache warmth before reviving it.
+// Package store persists consultations as small JSON files under the ask-up home
+// directory. A consultation is a handle onto a Claude Code session: ask-up keeps
+// a friendly id, a label, and the underlying session id so it can be resumed.
+// Conversation history lives in Claude Code (via --resume), not here.
 package store
 
 import (
@@ -15,37 +16,14 @@ import (
 	"time"
 )
 
-// Message is one turn in a consultation.
-type Message struct {
-	Role string `json:"role"` // "user" or "assistant"
-	Text string `json:"text"`
-}
-
-// Consultation is a persisted Opus thread.
+// Consultation is a resumable advisor thread.
 type Consultation struct {
-	ID           string    `json:"id"`
-	Label        string    `json:"label"`
-	Model        string    `json:"model"`
-	CreatedAt    time.Time `json:"created_at"`
-	LastUsed     time.Time `json:"last_used"`
-	PrefixTokens int64     `json:"prefix_tokens"` // total prompt tokens of the last request
-	Messages     []Message `json:"messages"`
-}
-
-// Warmth is the cache assessment of a consultation at a point in time.
-type Warmth struct {
-	Cacheable bool          // prefix reached the model's cache floor
-	Warm      bool          // within the warmth window (only meaningful if Cacheable)
-	Age       time.Duration // time since last use
-}
-
-// Assess reports whether reviving this consultation would hit a warm cache.
-// Below the cache floor there is nothing cached, so Warm is reported false but
-// callers should treat reuse as free (see Store callers / the warmth guard).
-func (c *Consultation) Assess(now time.Time, floor int64, window time.Duration) Warmth {
-	age := now.Sub(c.LastUsed)
-	cacheable := c.PrefixTokens >= floor
-	return Warmth{Cacheable: cacheable, Warm: cacheable && age <= window, Age: age}
+	ID        string    `json:"id"`         // friendly handle, e.g. cns_1a2b3c4d
+	Label     string    `json:"label"`      // first line of the opening question
+	Model     string    `json:"model"`      // model the advisor ran as
+	SessionID string    `json:"session_id"` // Claude Code session id to --resume
+	CreatedAt time.Time `json:"created_at"`
+	LastUsed  time.Time `json:"last_used"`
 }
 
 // Store is a directory of consultation files.
@@ -66,13 +44,12 @@ func New(home string) (*Store, error) {
 func NewID() string {
 	b := make([]byte, 4)
 	if _, err := rand.Read(b); err != nil {
-		// rand.Read only fails on a broken platform RNG; fall back to time.
 		return "cns_" + hex.EncodeToString([]byte(time.Now().Format("150405")))[:8]
 	}
 	return "cns_" + hex.EncodeToString(b)
 }
 
-// Label derives a short, single-line label from the first question.
+// Label derives a short, single-line label from the opening question.
 func Label(question string) string {
 	s := strings.Join(strings.Fields(question), " ")
 	const maxLen = 60
@@ -125,7 +102,7 @@ func (s *Store) List() ([]*Consultation, error) {
 		}
 		c, err := s.Load(strings.TrimSuffix(e.Name(), ".json"))
 		if err != nil {
-			continue // skip unreadable/partial files rather than fail the whole list
+			continue
 		}
 		out = append(out, c)
 	}

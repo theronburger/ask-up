@@ -2,100 +2,90 @@ package consult
 
 import (
 	"context"
-	"io"
-	"net/http"
-	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/theronburger/ask-up/internal/config"
-	"github.com/theronburger/ask-up/internal/store"
 )
 
-// TestAsk wires the SDK to a stub server so we exercise request building and
-// response/usage parsing without a network or a real key.
+// fakeClaude writes a script that records its args and stdin, then prints the
+// given JSON, standing in for the real `claude` binary.
+func fakeClaude(t *testing.T, replyJSON string) (bin, argsFile, stdinFile string) {
+	t.Helper()
+	dir := t.TempDir()
+	argsFile = filepath.Join(dir, "args")
+	stdinFile = filepath.Join(dir, "stdin")
+	bin = filepath.Join(dir, "claude")
+	script := "#!/bin/sh\n" +
+		"for a in \"$@\"; do printf '%s\\n' \"$a\"; done > " + argsFile + "\n" +
+		"cat > " + stdinFile + "\n" +
+		"cat <<'JSON'\n" + replyJSON + "\nJSON\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return bin, argsFile, stdinFile
+}
+
 func TestAsk(t *testing.T) {
-	t.Setenv("ANTHROPIC_API_KEY", "test-key")
-
-	const reply = `{
-		"id": "msg_test",
-		"type": "message",
-		"role": "assistant",
-		"model": "claude-opus-4-8",
-		"stop_reason": "end_turn",
-		"content": [{"type": "text", "text": "pong"}],
-		"usage": {
-			"input_tokens": 12,
-			"output_tokens": 3,
-			"cache_read_input_tokens": 7,
-			"cache_creation_input_tokens": 0
-		}
-	}`
-
-	var gotBody string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b, _ := io.ReadAll(r.Body)
-		gotBody = string(b)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, reply)
-	}))
-	defer srv.Close()
+	reply := `{"result":"use a tryLock","session_id":"sess-123","is_error":false,"usage":{"input_tokens":304,"output_tokens":12,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}`
+	bin, argsFile, stdinFile := fakeClaude(t, reply)
 
 	cfg := config.Default()
-	cfg.BaseURL = srv.URL
+	cfg.ClaudeBin = bin
 
-	history := []store.Message{
-		{Role: "user", Text: "earlier question"},
-		{Role: "assistant", Text: "earlier answer"},
-	}
-	res, err := Ask(context.Background(), cfg, history, "ping")
+	res, err := Ask(context.Background(), cfg, "", "is this lock ordering deadlock-safe?")
 	if err != nil {
 		t.Fatalf("Ask: %v", err)
 	}
-
-	if res.Answer != "pong" {
-		t.Errorf("answer = %q, want pong", res.Answer)
+	if res.Answer != "use a tryLock" {
+		t.Errorf("answer = %q", res.Answer)
 	}
-	if res.InputTokens != 12 || res.CacheReadInputTokens != 7 || res.OutputTokens != 3 {
+	if res.SessionID != "sess-123" {
+		t.Errorf("session id = %q", res.SessionID)
+	}
+	if res.InputTokens != 304 || res.OutputTokens != 12 {
 		t.Errorf("usage parsed wrong: %+v", res)
 	}
-	if got, want := res.PrefixTokens(), int64(19); got != want {
-		t.Errorf("PrefixTokens = %d, want %d", got, want)
-	}
 
-	// The request should carry the system prompt, the history, and the new question.
-	for _, frag := range []string{"earlier question", "earlier answer", "ping", "adaptive", "\"effort\":\"high\""} {
-		if !strings.Contains(gotBody, frag) {
-			t.Errorf("request body missing %q", frag)
+	args, _ := os.ReadFile(argsFile)
+	for _, want := range []string{"-p", "--model", "opus", "--effort", "xhigh", "--output-format", "json", "--strict-mcp-config", "--tools", "--exclude-dynamic-system-prompt-sections", "--system-prompt"} {
+		if !strings.Contains(string(args), want) {
+			t.Errorf("args missing %q; got:\n%s", want, args)
 		}
+	}
+	if strings.Contains(string(args), "--resume") {
+		t.Error("new consultation should not pass --resume")
+	}
+	stdin, _ := os.ReadFile(stdinFile)
+	if strings.TrimSpace(string(stdin)) != "is this lock ordering deadlock-safe?" {
+		t.Errorf("prompt not passed on stdin; got %q", stdin)
 	}
 }
 
-func TestRunSecretCommand(t *testing.T) {
-	got, err := runSecretCommand("printf 'sk-test-123'")
-	if err != nil {
-		t.Fatalf("runSecretCommand: %v", err)
-	}
-	if got != "sk-test-123" {
-		t.Errorf("got %q, want sk-test-123", got)
-	}
+func TestAskResume(t *testing.T) {
+	reply := `{"result":"yes, across processes too","session_id":"sess-123","is_error":false,"usage":{"input_tokens":50,"output_tokens":8}}`
+	bin, argsFile, _ := fakeClaude(t, reply)
+	cfg := config.Default()
+	cfg.ClaudeBin = bin
 
-	if _, err := runSecretCommand("true"); err == nil {
-		t.Error("expected error when command produces no output")
+	if _, err := Ask(context.Background(), cfg, "sess-123", "and across processes?"); err != nil {
+		t.Fatalf("Ask: %v", err)
 	}
-	if _, err := runSecretCommand("exit 7"); err == nil {
-		t.Error("expected error when command fails")
+	args, _ := os.ReadFile(argsFile)
+	if !strings.Contains(string(args), "--resume") || !strings.Contains(string(args), "sess-123") {
+		t.Errorf("resume should pass --resume sess-123; got:\n%s", args)
 	}
 }
 
-func TestEffortMapping(t *testing.T) {
-	cases := map[string]string{
-		"low": "low", "medium": "medium", "high": "high",
-		"xhigh": "xhigh", "max": "max", "": "high", "bogus": "high",
-	}
-	for in, want := range cases {
-		if got := string(effort(in)); got != want {
-			t.Errorf("effort(%q) = %q, want %q", in, got, want)
-		}
+func TestAskReportsError(t *testing.T) {
+	reply := `{"result":"login required","session_id":"","is_error":true,"subtype":"auth_error"}`
+	bin, _, _ := fakeClaude(t, reply)
+	cfg := config.Default()
+	cfg.ClaudeBin = bin
+
+	if _, err := Ask(context.Background(), cfg, "", "anything"); err == nil {
+		t.Error("expected error when claude reports is_error")
 	}
 }

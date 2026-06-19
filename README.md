@@ -1,16 +1,33 @@
+<p align="center">
+  <img src="assets/logo.png" alt="ask-up logo" width="300">
+</p>
+
 # ask-up
 
-A quick word with a smarter model.
+A quick word with a bigger model.
 
-`ask-up` is a command-line tool that lets a coding agent escalate a single hard question *up* to a more capable model, get a direct second opinion, and carry on. The agent stays on its fast model for the main loop and only reaches up when it is genuinely uncertain. "Up" is a direction, not a product: the target model is configurable and defaults to Claude Opus 4.8.
+`ask-up` lets a coding agent running a smaller model escalate a single hard question *up* to a larger thinking model, get a direct second opinion, and carry on. The agent stays on its fast model for the main loop and only reaches up when it is genuinely uncertain.
 
-It is built for agent harnesses like Claude Code, where the core agent runs on Sonnet and calls `ask-up` through Bash. There is no server and no daemon. Each call is a short-lived process that makes one API call and exits. State lives in plain files under `~/.ask-up`.
+It wraps the **local Claude Code CLI** in print mode, so it runs against whatever your Claude Code profile is already logged into. Each call is a short-lived process that asks once and exits; consultation state is a small file under `~/.ask-up`.
 
-## Why a separate tool, not a model swap
+## Set up (have your agent do it)
 
-Switching the main agent from Sonnet to Opus mid-session throws away the prompt cache (caches are per-model) and is expensive for every turn. `ask-up` keeps the escalation out of band: the main loop stays on one model, and only the targeted question goes up. Each consultation is its own small thread you can continue.
+Paste this into your coding agent (Claude Code, etc.):
 
-## Install
+```text
+Please install and set up the `ask-up` CLI on my machine and wire it into, well, yourself. Read and follow the setup guide at:
+https://raw.githubusercontent.com/theronburger/ask-up/refs/heads/main/SETUP.md
+```
+
+Prefer to do it by hand? See [Manual install](#manual-install) and [Configuration](#configuration).
+
+## How it works
+
+`ask-up` shells out to `claude -p` (print mode) with the agent harness stripped: no tools, no MCP servers, no project context. What's left is just an advisor system prompt plus your question, so a call costs roughly its own tokens (a few hundred) rather than the ~25k a default `claude -p` would carry. It authenticates however your Claude Code profile does, so there's nothing to provision. Continuing a consultation resumes the same Claude Code session, so the advisor keeps prior context.
+
+Because it leans on Claude Code, the advisor is the more capable model run as a plain reasoner, not a second coding agent crawling your repo. The lower agent arrives with context and a question; the advisor brings reasoning and an answer.
+
+## Manual install
 
 Prebuilt binaries are on the [Releases](https://github.com/theronburger/ask-up/releases) page. Download the archive for your platform, extract `ask-up`, and put it on your `PATH`.
 
@@ -20,37 +37,37 @@ Or build from source (Go 1.24+):
 go install github.com/theronburger/ask-up@latest
 ```
 
-## Authentication
+(`gh release download <tag> --repo theronburger/ask-up` also fetches a prebuilt binary.)
 
-`ask-up` is password-manager-agnostic. It never stores a secret; it only needs the key at runtime, resolved in this order:
+You also need Claude Code installed and logged in (`claude` on your `PATH`, a subscription that includes `opus`).
 
-1. `ANTHROPIC_API_KEY` from the environment (standard path; works with enterprise keys)
-2. `ANTHROPIC_AUTH_TOKEN` from the environment (for gateway/token auth)
-3. `api_key_command` from the config file: any command whose stdout is the key
+## Configuration
 
-The security properties that matter do not depend on which vault you use: keep the secret in a manager, get it into the process at runtime, and never write it to a file. `ask-up`'s config holds only the *command*, never the key.
-
-**Option A: export from your manager** in your shell profile. Any tool that prints the secret works:
-
-```sh
-export ANTHROPIC_API_KEY="$(op read 'op://Vault/Anthropic/credential')"   # 1Password
-export ANTHROPIC_API_KEY="$(pass anthropic/api-key)"                       # pass
-export ANTHROPIC_API_KEY="$(aws secretsmanager get-secret-value --secret-id anthropic --query SecretString --output text)"
-export ANTHROPIC_API_KEY="$(vault kv get -field=key secret/anthropic)"     # HashiCorp Vault
-export ANTHROPIC_API_KEY="$(doppler secrets get ANTHROPIC_API_KEY --plain)"
-```
-
-**Option B: let `ask-up` fetch it on demand** (no long-lived exported key). Put the fetch command in `~/.ask-up/config.toml`:
+Optional file at `~/.ask-up/config.toml` (override the directory with `ASK_UP_HOME`). Any key you omit falls back to the default.
 
 ```toml
-api_key_command = "op read 'op://Vault/Anthropic/credential'"
+model      = "opus"     # Claude Code model alias or id (e.g. "opus", "claude-opus-4-8")
+effort     = "xhigh"    # reasoning effort: low | medium | high | xhigh | max
+claude_bin = "claude"   # path to the real claude binary; set an absolute path if a shell alias/wrapper shadows it
+config_dir = ""         # CLAUDE_CONFIG_DIR for the advisor; selects which account (empty = inherit the current one)
+# system   = "..."      # override the advisor system prompt
 ```
 
-`ask-up` runs it per call and uses the output as the key. Latency is negligible next to the model call, and the secret only ever lives in the short-lived process's memory. The command runs in your shell's trust boundary; on failure `ask-up` reports it without echoing the command's stderr, so secrets do not leak into logs.
+**Account.** By default `ask-up` runs under the **same Claude account as the calling agent**: it inherits `CLAUDE_CONFIG_DIR`, so a work-profile agent consults the work account and a personal one consults personal, with no configuration. Set `config_dir` only to pin a specific account regardless of caller.
 
-If you do not know which manager your org uses, you do not need to: pick whichever of A/B fits, point it at your org's tool, and the key never touches disk either way.
+**Effort.** Defaults to `xhigh` (a notch above the standard `high`, since this is for hard calls); override per-call with `-effort low|medium|high|xhigh|max`. Setting it explicitly means the advisor's effort is deliberate rather than inherited from the caller.
 
-For an enterprise gateway, also set `base_url` in the config (below).
+**Binary.** `claude_bin` matters if you wrap `claude` with a shell function/alias for profile switching: point it at the real binary (often `~/.local/bin/claude`) so `ask-up` bypasses the wrapper. (Go's exec already skips shell functions, so plain `claude` usually resolves correctly.)
+
+## Multiple accounts
+
+If you keep separate Claude Code profiles for, say, work and personal use, `ask-up` should already route correctly: it inherits the account of whichever profile calls it, so a work session consults the work account and a personal session consults personal. Nothing to configure.
+
+That said, it's helpful to add a guard to each profile's global `CLAUDE.md` anyway:
+
+- **Work profile:** tell the agent to only operate inside your work repositories and to refuse anything outside them.
+- **Non-work profiles:** add the inverse, AND an explicit rule never to read or touch work code.
+
 
 ## Usage
 
@@ -71,52 +88,23 @@ We deadlock under reentrancy in the lock manager. Relevant snippet from lock.go:
 Question: is taking `inner` while holding `mu` safe here, or do we need a tryLock path?
 EOF
 
-ask-up -continue cns_1a2b3c4d "what about across processes?"   # continue a thread
-ask-up -continue cns_1a2b3c4d -force "..."                     # revive past its cache window
+ask-up -continue cns_1a2b3c4d "what about across processes?"   # resume the same advisor session
 ask-up -list                                                   # list saved consultations
-ask-up -v "question"                                           # also print token/cache usage
+ask-up -v "question"                                           # also print token/session info
 ```
 
-Flags must come before the prompt (Go's flag parser stops at the first non-flag argument). The answer goes to stdout; the pointer line (how to continue, how long the cache stays warm) and any usage detail go to stderr, so the answer pipes cleanly.
+Flags must come before the prompt (Go's flag parser stops at the first non-flag argument). The answer goes to stdout; the continue pointer and any usage detail go to stderr, so the answer pipes cleanly.
 
 ### Composing a good consultation
 
-The upstream model gets one shot and cannot see your codebase. The quality of its answer is set entirely by how you frame the call, so do the work it cannot:
+The advisor gets one shot and cannot see your codebase. The quality of its answer is set entirely by how you frame the call, so do the work it cannot:
 
 - **Curate, don't dump.** Pull the few relevant snippets, not whole files. A tight brief beats a pile of context.
 - **Summarize the situation** and say what you have already tried or ruled out.
 - **Ask one specific, decidable question.**
 - Pipe it via a quoted heredoc (`<<'EOF'`) so code, quotes, and backticks pass through untouched.
 
-## How reuse and the cache work
-
-Each consultation is one Opus thread. Continuing it re-sends the history, so the prompt cache can serve the repeated prefix at roughly a tenth of the input price. Two facts shape the behavior:
-
-- **Cache TTL.** With an API key the breakpoint TTL is 5 minutes by default (set `ttl = "1h"` to keep threads warm across longer gaps, at a higher write cost). There is no way to query remaining time, so `ask-up` estimates warmth from when you last used a consultation and declares it "cold" a few seconds before the real expiry.
-- **The cache floor.** Prompt caching only engages once the prefix reaches the model's minimum (4096 tokens on Opus 4.8, 2048 on Sonnet 4.6 / Fable 5). Below that the cache marker is ignored, so there is nothing to be warm or cold about.
-
-The warmth guard follows from these: `-continue` on a consultation that is large enough to cache **and** likely cold will refuse and warn, rather than silently re-billing the whole history at full price. Re-run with `-force` to revive it, or omit `-continue` to start fresh. Consultations below the floor are reused on relevance alone; the guard does not apply.
-
-Use `ask-up -v` to see the real outcome: `cache_read` greater than zero means you hit a warm cache.
-
-## Configuration
-
-Optional file at `~/.ask-up/config.toml` (override the directory with `ASK_UP_HOME`). Any key you omit falls back to the default.
-
-```toml
-model         = "claude-opus-4-8"  # the "up" model
-effort        = "high"             # low | medium | high | xhigh | max
-ttl           = "5m"               # cache breakpoint TTL: "5m" or "1h"
-warmth_window = ""                 # duration override; default is ttl minus 10s
-base_url      = ""                 # optional enterprise gateway
-max_tokens    = 8192               # response cap
-# system          = "..."          # override the consult instruction
-# api_key_command = "..."          # fetch the key at runtime (see Authentication)
-```
-
-## Claude Code integration
-
-`ask-up` is meant to be called by your agent. To wire it into Claude Code (allowlist the command and teach the agent when to use it), see [SETUP.md](./SETUP.md), which is written so a coding agent can do the setup itself, including across multiple `~/.claude*` profiles.
+`-continue` resumes the same session, so it keeps prior context and can go a few rounds. Only continue a consultation that already holds context relevant to the new question; start fresh for an unrelated topic.
 
 ## Development
 

@@ -1,150 +1,123 @@
-// Package consult wraps a single escalation call to the upstream model. It
-// rebuilds the consultation history into a request, sets a cache breakpoint on
-// the stable prefix, and returns the answer plus token usage.
+// Package consult runs one advisor turn by invoking the local Claude Code CLI in
+// print mode. It strips the agent harness (tools, MCP servers, dynamic context)
+// so the call carries only our system prompt and the question, and uses Claude
+// Code's own session for continuity via --resume.
 package consult
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
-	"time"
-
-	"github.com/anthropics/anthropic-sdk-go"
-	"github.com/anthropics/anthropic-sdk-go/option"
 
 	"github.com/theronburger/ask-up/internal/config"
-	"github.com/theronburger/ask-up/internal/store"
 )
 
-// Result is the outcome of one escalation.
+// Result is the outcome of one advisor turn.
 type Result struct {
 	Answer                   string
+	SessionID                string
 	InputTokens              int64
 	OutputTokens             int64
 	CacheReadInputTokens     int64
 	CacheCreationInputTokens int64
 }
 
-// PrefixTokens is the total prompt size: fresh input plus everything served
-// from or written to cache. This is what we compare against the cache floor.
+// PrefixTokens is the total prompt size for this turn.
 func (r Result) PrefixTokens() int64 {
 	return r.InputTokens + r.CacheReadInputTokens + r.CacheCreationInputTokens
 }
 
-// Ask sends history plus the new question to the configured model and returns
-// the assistant's reply. The API key is resolved by the SDK from
-// ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN, when set).
-func Ask(ctx context.Context, cfg config.Config, history []store.Message, question string) (Result, error) {
-	client, err := newClient(cfg)
-	if err != nil {
-		return Result{}, err
-	}
+// claudeOutput is the subset of `claude -p --output-format json` we read.
+type claudeOutput struct {
+	Result    string `json:"result"`
+	SessionID string `json:"session_id"`
+	IsError   bool   `json:"is_error"`
+	Subtype   string `json:"subtype"`
+	Usage     struct {
+		InputTokens              int64 `json:"input_tokens"`
+		OutputTokens             int64 `json:"output_tokens"`
+		CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
+		CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
+	} `json:"usage"`
+}
 
-	cc := anthropic.NewCacheControlEphemeralParam()
-	if cfg.TTLDuration() == time.Hour {
-		cc.TTL = anthropic.CacheControlEphemeralTTLTTL1h
-	}
+// Ask sends prompt to the advisor. A non-empty sessionID resumes that Claude
+// Code session; otherwise a fresh one is started. The prompt is passed on stdin
+// so curated, multi-line briefs need no shell escaping.
+func Ask(ctx context.Context, cfg config.Config, sessionID, prompt string) (Result, error) {
+	cmd := exec.CommandContext(ctx, cfg.ClaudeBin, buildArgs(cfg, sessionID)...)
+	cmd.Stdin = strings.NewReader(prompt)
+	cmd.Env = childEnv(cfg)
+	// Run from a neutral directory so no project CLAUDE.md leaks into context.
+	cmd.Dir = os.TempDir()
 
-	system := []anthropic.TextBlockParam{{Text: cfg.System, CacheControl: cc}}
-
-	msgs := make([]anthropic.MessageParam, 0, len(history)+1)
-	for _, m := range history {
-		block := anthropic.NewTextBlock(m.Text)
-		if m.Role == "assistant" {
-			msgs = append(msgs, anthropic.NewAssistantMessage(block))
-		} else {
-			msgs = append(msgs, anthropic.NewUserMessage(block))
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = strings.TrimSpace(stdout.String())
 		}
-	}
-	// Cache breakpoint on the newest turn: the whole prefix up to here becomes
-	// readable on the next continue.
-	q := anthropic.NewTextBlock(question)
-	q.OfText.CacheControl = cc
-	msgs = append(msgs, anthropic.NewUserMessage(q))
-
-	resp, err := client.Messages.New(ctx, anthropic.MessageNewParams{
-		Model:        cfg.Model,
-		MaxTokens:    cfg.MaxTokens,
-		System:       system,
-		Messages:     msgs,
-		Thinking:     anthropic.ThinkingConfigParamUnion{OfAdaptive: &anthropic.ThinkingConfigAdaptiveParam{}},
-		OutputConfig: anthropic.OutputConfigParam{Effort: effort(cfg.Effort)},
-	})
-	if err != nil {
-		return Result{}, fmt.Errorf("calling %s: %w", cfg.Model, err)
+		return Result{}, fmt.Errorf("running %s: %w: %s", cfg.ClaudeBin, err, msg)
 	}
 
-	var sb strings.Builder
-	for _, block := range resp.Content {
-		if block.Type == "text" {
-			sb.WriteString(block.Text)
-		}
+	var out claudeOutput
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		return Result{}, fmt.Errorf("parsing claude output: %w", err)
+	}
+	if out.IsError {
+		return Result{}, fmt.Errorf("claude reported an error (%s): %s", out.Subtype, out.Result)
 	}
 
 	return Result{
-		Answer:                   strings.TrimSpace(sb.String()),
-		InputTokens:              resp.Usage.InputTokens,
-		OutputTokens:             resp.Usage.OutputTokens,
-		CacheReadInputTokens:     resp.Usage.CacheReadInputTokens,
-		CacheCreationInputTokens: resp.Usage.CacheCreationInputTokens,
+		Answer:                   strings.TrimSpace(out.Result),
+		SessionID:                out.SessionID,
+		InputTokens:              out.Usage.InputTokens,
+		OutputTokens:             out.Usage.OutputTokens,
+		CacheReadInputTokens:     out.Usage.CacheReadInputTokens,
+		CacheCreationInputTokens: out.Usage.CacheCreationInputTokens,
 	}, nil
 }
 
-// newClient resolves credentials in a password-manager-agnostic way. The order
-// is: explicit env vars first (ad-hoc override / CI), then a configured fetch
-// command. The secret never has to live in a file or a long-lived export.
-func newClient(cfg config.Config) (anthropic.Client, error) {
-	var opts []option.RequestOption
-	if cfg.BaseURL != "" {
-		opts = append(opts, option.WithBaseURL(cfg.BaseURL))
+// buildArgs constructs the lean print-mode invocation. `--tools` is given no
+// values (it is immediately followed by another flag), which drops every tool
+// schema; combined with --strict-mcp-config and a replaced system prompt this
+// removes the agent harness, leaving just the persona and the question.
+func buildArgs(cfg config.Config, sessionID string) []string {
+	args := []string{
+		"-p",
+		"--model", cfg.Model,
+		"--output-format", "json",
+		"--strict-mcp-config",
 	}
-
-	switch {
-	case os.Getenv("ANTHROPIC_API_KEY") != "":
-		// SDK reads ANTHROPIC_API_KEY automatically; nothing to add.
-	case os.Getenv("ANTHROPIC_AUTH_TOKEN") != "":
-		opts = append(opts, option.WithAuthToken(os.Getenv("ANTHROPIC_AUTH_TOKEN")))
-	case cfg.APIKeyCommand != "":
-		key, err := runSecretCommand(cfg.APIKeyCommand)
-		if err != nil {
-			return anthropic.Client{}, err
-		}
-		opts = append(opts, option.WithAPIKey(key))
+	if cfg.Effort != "" {
+		// Set effort explicitly so it doesn't inherit the caller's CLAUDE_EFFORT.
+		args = append(args, "--effort", cfg.Effort)
 	}
-	// If none matched, the SDK surfaces a clear missing-credential error on use.
-
-	return anthropic.NewClient(opts...), nil
+	// `--tools` is given no values (immediately followed by another flag), which
+	// drops every tool schema. Keep it directly before --system-prompt.
+	args = append(args,
+		"--tools",
+		"--exclude-dynamic-system-prompt-sections",
+		"--system-prompt", cfg.System,
+	)
+	if sessionID != "" {
+		args = append(args, "--resume", sessionID)
+	}
+	return args
 }
 
-// runSecretCommand runs a user-configured command and returns its trimmed
-// stdout as the API key. The command comes from the user's own config file, so
-// it runs in the same trust boundary as their shell. Errors are reported
-// without echoing the command's stderr, so secrets can't leak into logs.
-func runSecretCommand(command string) (string, error) {
-	out, err := exec.Command("sh", "-c", command).Output()
-	if err != nil {
-		return "", fmt.Errorf("api_key_command failed: %w", err)
+// childEnv selects the Claude Code account for the child via CLAUDE_CONFIG_DIR
+// when configured, inheriting the rest of the environment.
+func childEnv(cfg config.Config) []string {
+	env := os.Environ()
+	if cfg.ConfigDir != "" {
+		env = append(env, "CLAUDE_CONFIG_DIR="+cfg.ConfigDir)
 	}
-	key := strings.TrimSpace(string(out))
-	if key == "" {
-		return "", fmt.Errorf("api_key_command produced no output")
-	}
-	return key, nil
-}
-
-func effort(s string) anthropic.OutputConfigEffort {
-	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "low":
-		return anthropic.OutputConfigEffortLow
-	case "medium":
-		return anthropic.OutputConfigEffortMedium
-	case "xhigh":
-		return anthropic.OutputConfigEffortXhigh
-	case "max":
-		return anthropic.OutputConfigEffortMax
-	default:
-		return anthropic.OutputConfigEffortHigh
-	}
+	return env
 }

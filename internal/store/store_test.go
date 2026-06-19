@@ -23,8 +23,7 @@ func TestLabel(t *testing.T) {
 	if got := Label("  hello   world  "); got != "hello world" {
 		t.Errorf("Label collapse = %q", got)
 	}
-	long := strings.Repeat("a", 100)
-	got := Label(long)
+	got := Label(strings.Repeat("a", 100))
 	if len([]rune(got)) > 60 {
 		t.Errorf("Label not truncated: %d runes", len([]rune(got)))
 	}
@@ -39,16 +38,12 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := &Consultation{
-		ID:           "cns_abc12345",
-		Label:        "lock ordering",
-		Model:        "claude-opus-4-8",
-		CreatedAt:    time.Now().Truncate(time.Second),
-		LastUsed:     time.Now().Truncate(time.Second),
-		PrefixTokens: 5300,
-		Messages: []Message{
-			{Role: "user", Text: "q1"},
-			{Role: "assistant", Text: "a1"},
-		},
+		ID:        "cns_abc12345",
+		Label:     "lock ordering",
+		Model:     "opus",
+		SessionID: "8b6b15e2-9207-48cc-a3d1-73d8044b1765",
+		CreatedAt: time.Now().Truncate(time.Second),
+		LastUsed:  time.Now().Truncate(time.Second),
 	}
 	if err := st.Save(want); err != nil {
 		t.Fatal(err)
@@ -57,7 +52,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.ID != want.ID || got.PrefixTokens != want.PrefixTokens || len(got.Messages) != 2 {
+	if got.ID != want.ID || got.SessionID != want.SessionID || got.Model != want.Model {
 		t.Errorf("round trip mismatch: %+v", got)
 	}
 }
@@ -81,36 +76,5 @@ func TestListOrdering(t *testing.T) {
 	}
 	if len(list) != 2 || list[0].ID != "cns_new00000" {
 		t.Errorf("expected most-recent first, got %v", list)
-	}
-}
-
-func TestAssess(t *testing.T) {
-	now := time.Now()
-	window := 290 * time.Second
-	const floor = 4096
-
-	tests := []struct {
-		name          string
-		prefix        int64
-		lastUsed      time.Time
-		wantCacheable bool
-		wantWarm      bool
-	}{
-		{"large and recent", 5000, now.Add(-1 * time.Minute), true, true},
-		{"large and stale", 5000, now.Add(-30 * time.Minute), true, false},
-		{"below floor", 1000, now.Add(-1 * time.Second), false, false},
-		{"below floor and stale", 1000, now.Add(-time.Hour), false, false},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			c := &Consultation{PrefixTokens: tc.prefix, LastUsed: tc.lastUsed}
-			w := c.Assess(now, floor, window)
-			if w.Cacheable != tc.wantCacheable {
-				t.Errorf("Cacheable = %v, want %v", w.Cacheable, tc.wantCacheable)
-			}
-			if w.Warm != tc.wantWarm {
-				t.Errorf("Warm = %v, want %v", w.Warm, tc.wantWarm)
-			}
-		})
 	}
 }

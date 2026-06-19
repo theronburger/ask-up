@@ -1,98 +1,81 @@
 # Setting up ask-up (instructions for a coding agent)
 
-You are a coding agent installing `ask-up` for your user. Do the steps yourself; only ask the human for the few things you cannot do (the API key, and which profiles to wire). Keep the human informed as you go. Do not write any secret to a file.
+`ask-up` wraps the local Claude Code CLI, so there are no API keys to manage; it runs against whatever account your Claude Code profile is logged into. The defaults need almost no input, so ask the user only where a step calls for it. Keep them informed as you go.
 
 ## 1. Install the binary
 
-Prefer a prebuilt release; fall back to building from source.
+Install with Go (1.24+):
 
 ```sh
-# From source (Go 1.24+):
 go install github.com/theronburger/ask-up@latest
-# Confirm it is on PATH:
 ask-up -version
 ```
 
-If `ask-up` is not found after `go install`, ensure `$(go env GOPATH)/bin` is on the user's `PATH` and tell them the line to add to their shell profile.
+If `ask-up` isn't found afterwards, ensure `$(go env GOPATH)/bin` is on `PATH`. A prebuilt binary is also available via `gh release download <tag> --repo theronburger/ask-up`.
 
-## 2. Create the config
+Also confirm Claude Code is installed and logged in: `claude --version`, and that the account/subscription includes `opus`.
 
-Write `~/.ask-up/config.toml` (or `$ASK_UP_HOME/config.toml`) only if the user wants non-default settings. Defaults are fine for most: model `claude-opus-4-8`, effort `high`, ttl `5m`. A starting file:
+## 2. The claude binary (usually nothing to do)
 
-```toml
-model      = "claude-opus-4-8"
-effort     = "high"
-ttl        = "5m"
-# base_url = "https://your-enterprise-gateway/..."   # only if applicable
-```
+`ask-up` runs `claude` via `PATH`, which ignores shell aliases and functions. So even if the user wraps `claude` in their shell for profile switching, the default resolves to the real binary (typically `~/.local/bin/claude`). You normally do **not** set `claude_bin`.
 
-## 3. Wire the API key (do not write it to a file)
+Only set it if the step-5 probe later fails to find or run `claude` (for example, if `PATH`'s `claude` is itself a wrapper *script*). Find the real path with `ls -l ~/.local/bin/claude`.
 
-`ask-up` never stores secrets. It resolves the key at runtime in this order: `ANTHROPIC_API_KEY`, then `ANTHROPIC_AUTH_TOKEN`, then the `api_key_command` in the config. It is password-manager-agnostic; the requirement is only that the secret comes from a manager at runtime and is never written to disk.
+## 3. Account (inherits the caller by default)
 
-Ask the user which secrets manager their org uses (1Password, AWS Secrets Manager, HashiCorp Vault, `pass`, Doppler, etc.) and which credential applies. Then wire whichever option fits; both keep the key off disk:
+By default `ask-up` consults the **same account as the calling agent**: it passes through `CLAUDE_CONFIG_DIR`, so a work-profile agent consults work and a personal one consults personal. This is almost always what you want, so leave `config_dir` unset.
 
-**Option A: export from their manager** in their shell profile. Substitute their tool's read command:
-
-```sh
-export ANTHROPIC_API_KEY="$(<their-manager-read-command>)"
-```
-
-**Option B: fetch on demand** (no long-lived exported key). Put the command in `~/.ask-up/config.toml`:
-
-```toml
-api_key_command = "<their-manager-read-command>"
-```
-
-Do not paste the raw key anywhere. If the user does not know their manager, help them identify it (`which op vault pass doppler aws gcloud 2>/dev/null`, or ask their team) before wiring.
-
-Then verify end to end with a probe (this makes a real call):
-
-```sh
-ask-up -v "Reply with the single word: ready"
-```
-
-Check that an answer prints and the usage line appears on stderr. If it fails on auth, the key is not resolving; fix that before continuing.
-
-## 4. Wire it into Claude Code (handle multiple profiles)
-
-The user may have more than one Claude Code config directory. Detect them:
+Set `config_dir` only to pin a specific account regardless of caller. If the user wants that, find the profile dir and use it (pinning works only if that account is logged in):
 
 ```sh
 ls -d ~/.claude* 2>/dev/null
 ```
 
-For each profile directory the user wants to enable (ask if there is more than one), do two things:
+## 4. Write the config (only if you need non-defaults)
 
-**a. Allowlist the command** so it does not prompt on every call. In that directory's `settings.json`, add `Bash(ask-up:*)` to `permissions.allow` (create the structure if absent):
+If the defaults fit (model `opus`, inherit the account, `claude` on `PATH`), you can skip the config file entirely. Otherwise create `~/.ask-up/config.toml` with just the keys you want to change:
 
-```json
-{
-  "permissions": {
-    "allow": ["Bash(ask-up:*)"]
-  }
-}
+```toml
+model  = "opus"     # or a specific id, e.g. "claude-opus-4-8"
+effort = "xhigh"    # low | medium | high | xhigh | max
+
+# config_dir = "/Users/<you>/.claude-work"       # pin a specific account (default: inherit the caller)
+# claude_bin = "/Users/<you>/.local/bin/claude"  # only if the probe can't find or run claude
 ```
 
-Merge into any existing `allow` array; do not clobber other entries.
+## 5. Verify with a probe (real call)
 
-**b. Teach the agent when to use it.** Append a section to that directory's `CLAUDE.md` (create the file if needed):
+```sh
+ask-up -v "Reply with exactly the single word: pong"
+```
+
+Expect `pong` on stdout and a low token count on stderr (a few hundred; if it's tens of thousands, the harness isn't being stripped, so report it). If it errors about login, the target account isn't authenticated, so have the user log into it with `claude`.
+
+## 6. Wire it into Claude Code (and handle multiple profiles)
+
+For each Claude Code profile the user wants this available in (something like `ls -d ~/.claude*`; ask which if more than one, they may put their profiles elsewhere):
+
+**a. Allowlist the command** in that profile's `settings.json` so it doesn't prompt every call:
+
+```json
+{ "permissions": { "allow": ["Bash(ask-up:*)"] } }
+```
+
+Merge into any existing `allow` array; don't clobber other entries.
+
+**b. Add usage guidance** to that profile's `CLAUDE.md` (create it if needed):
 
 ```markdown
 ## Escalating to a stronger model (ask-up)
 
-When you hit genuine uncertainty on a correctness-critical decision and a second
-opinion from a more capable model would change your answer, run `ask-up`.
+When you hit uncertainty on a correctness-critical decision and a second
+opinion from a more capable model would change your answer, consult one with
+`ask-up`. Lean towards asking instead. If you find yourself saying "Actually..." then ask up.
 
-The model you escalate to gets ONE shot and cannot see this codebase. Its answer
-is only as good as the brief you give it, so do the work it cannot:
-
-- Curate the few relevant snippets; do not dump whole files.
-- Summarize the situation and what you have already tried or ruled out.
-- Ask one specific, decidable question.
-
-Pipe the brief via a quoted heredoc so code, quotes, and backticks need no
-escaping:
+The advisor gets ONE shot and cannot see this codebase, so do the work
+it cannot: curate the few relevant snippets (don't dump whole files), summarize
+what you have tried, and ask one specific, decidable question. Pipe the brief via
+a quoted heredoc so code and quotes need no escaping:
 
     ask-up <<'EOF'
     <2-3 sentence situation summary>
@@ -100,20 +83,11 @@ escaping:
     Question: <one clear, decidable question>
     EOF
 
-A trivial one-liner can go inline: `ask-up "..."`. It prints the answer to
-stdout and a consultation id to stderr. Continue a thread when it already holds
-relevant context:
-
-    ask-up -continue <id> <<'EOF'
-    <follow-up>
-    EOF
-
-If `ask-up` warns a consultation's cache is cold, reviving it re-bills the full
-history; start fresh unless you need that prior context (then add -force). Do
-not escalate routine work; this is for the hard, uncertain calls. Flags come
-before the prompt.
+A trivial question can go inline: `ask-up "..."` but its unlikely you're asking up for a trivial question.
+It prints the answer to stdout and a consultation id to stderr. The advisor aims to one-shot the answer. You can go a few rounds with `ask-up -continue <id> "..."`, but only continue a consultation that already holds context relevant to your new question; start fresh for an unrelated topic. Do not escalate routine work; this is for the hard,
+uncertain calls. Flags come before the prompt.
 ```
 
-## 5. Confirm
+## 7. Confirm
 
-Run one real escalation through the configured tool and show the user the result plus the consultation id. Confirm `ask-up -list` shows it. You are done.
+Run one real consultation and show the user the answer plus the consultation id, and confirm `ask-up -list` shows it. Done.

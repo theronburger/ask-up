@@ -4,56 +4,21 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 )
 
 func TestDefault(t *testing.T) {
 	d := Default()
-	if d.Model != "claude-opus-4-8" {
+	if d.Model != "opus" {
 		t.Errorf("default model = %q", d.Model)
 	}
-	if d.Effort != "high" {
-		t.Errorf("default effort = %q", d.Effort)
+	if d.ClaudeBin != "claude" {
+		t.Errorf("default claude_bin = %q", d.ClaudeBin)
+	}
+	if d.Effort != "xhigh" {
+		t.Errorf("default effort = %q, want xhigh", d.Effort)
 	}
 	if d.System == "" {
 		t.Error("default system prompt is empty")
-	}
-}
-
-func TestFloorFor(t *testing.T) {
-	cases := map[string]int64{
-		"claude-opus-4-8":    4096,
-		"claude-haiku-4-5":   4096,
-		"claude-sonnet-4-6":  2048,
-		"claude-fable-5":     2048,
-		"claude-sonnet-4-5":  1024,
-		"some-unknown-model": 4096,
-	}
-	for model, want := range cases {
-		if got := FloorFor(model); got != want {
-			t.Errorf("FloorFor(%q) = %d, want %d", model, got, want)
-		}
-	}
-}
-
-func TestWarmthWindowDuration(t *testing.T) {
-	if got := (Config{TTL: "5m"}).WarmthWindowDuration(); got != 4*time.Minute+50*time.Second {
-		t.Errorf("5m window = %s, want 4m50s", got)
-	}
-	if got := (Config{TTL: "1h"}).WarmthWindowDuration(); got != time.Hour-10*time.Second {
-		t.Errorf("1h window = %s, want 59m50s", got)
-	}
-	if got := (Config{TTL: "5m", WarmthWindow: "90s"}).WarmthWindowDuration(); got != 90*time.Second {
-		t.Errorf("explicit window = %s, want 90s", got)
-	}
-}
-
-func TestTTLDuration(t *testing.T) {
-	if got := (Config{TTL: "1h"}).TTLDuration(); got != time.Hour {
-		t.Errorf("1h = %s", got)
-	}
-	if got := (Config{TTL: "garbage"}).TTLDuration(); got != 5*time.Minute {
-		t.Errorf("fallback = %s, want 5m", got)
 	}
 }
 
@@ -63,15 +28,15 @@ func TestLoadMissingFileReturnsDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.Model != "claude-opus-4-8" {
-		t.Errorf("model = %q, want default", cfg.Model)
+	if cfg.Model != "opus" || cfg.ClaudeBin != "claude" || cfg.System == "" {
+		t.Errorf("missing-file load did not return defaults: %+v", cfg)
 	}
 }
 
 func TestLoadOverlay(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("ASK_UP_HOME", home)
-	body := "model = \"claude-fable-5\"\nttl = \"1h\"\n"
+	body := "model = \"claude-opus-4-8\"\nconfig_dir = \"/Users/x/.claude-work\"\nclaude_bin = \"/opt/claude\"\n"
 	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -79,14 +44,14 @@ func TestLoadOverlay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.Model != "claude-fable-5" {
+	if cfg.Model != "claude-opus-4-8" {
 		t.Errorf("model = %q, want overlaid value", cfg.Model)
 	}
-	if cfg.TTL != "1h" {
-		t.Errorf("ttl = %q, want 1h", cfg.TTL)
+	if cfg.ConfigDir != "/Users/x/.claude-work" {
+		t.Errorf("config_dir = %q", cfg.ConfigDir)
 	}
-	if cfg.Effort != "high" {
-		t.Errorf("effort = %q, want default preserved", cfg.Effort)
+	if cfg.ClaudeBin != "/opt/claude" {
+		t.Errorf("claude_bin = %q", cfg.ClaudeBin)
 	}
 	if cfg.System == "" {
 		t.Error("system prompt should fall back to default when unset")
