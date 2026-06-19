@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.png?v=2" alt="ask-up logo" width="300">
+  <img src="assets/logo.png?v=3" alt="ask-up logo" width="300">
 </p>
 
 # ask-up
