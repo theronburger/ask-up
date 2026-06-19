@@ -18,13 +18,15 @@ import (
 func usage(fs *flag.FlagSet) {
 	fmt.Fprint(os.Stderr, `ask-up: escalate a question to a more capable model
 
-  ask-up "question"                    start a new consultation
-  ask-up -continue cns_x "follow-up"   continue an existing one
-  ask-up -continue cns_x -force "..."  revive one past its cache window
-  ask-up -list                         list saved consultations
-  ask-up -v "question"                 also print token/cache usage
+  ask-up "question"                     quick one-liner
+  ask-up <<'EOF' ...brief... EOF        compose a curated prompt on stdin
+  ask-up -continue cns_x "follow-up"    continue an existing consultation
+  ask-up -continue cns_x -force "..."   revive one past its cache window
+  ask-up -list                          list saved consultations
+  ask-up -v "question"                  also print token/cache usage
 
-Flags must come before the question.
+The prompt comes from stdin when piped, else from the arguments. Pipe a quoted
+heredoc for anything with code, quotes, or newlines. Flags come before the prompt.
 
 Flags:
 `)

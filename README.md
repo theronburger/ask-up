@@ -54,17 +54,39 @@ For an enterprise gateway, also set `base_url` in the config (below).
 
 ## Usage
 
+The prompt comes from stdin when piped, otherwise from the positional argument.
+
 ```sh
-ask-up "is this lock ordering deadlock-safe under reentrancy?"   # new consultation
-ask-up -continue cns_1a2b3c4d "what about across processes?"     # continue it
-ask-up -continue cns_1a2b3c4d -force "..."                       # revive past its cache window
-ask-up -list                                                     # list saved consultations
-ask-up -v "question"                                             # also print token/cache usage
+# quick one-liner
+ask-up "what's the idiomatic Go way to cancel a fan-out on first error?"
+
+# a curated brief via a quoted heredoc: multi-line, code-safe, no shell escaping
+ask-up <<'EOF'
+We deadlock under reentrancy in the lock manager. Relevant snippet from lock.go:
+
+    mu.Lock()
+    defer mu.Unlock()
+    inner.Lock()   // acquired while still holding mu
+
+Question: is taking `inner` while holding `mu` safe here, or do we need a tryLock path?
+EOF
+
+ask-up -continue cns_1a2b3c4d "what about across processes?"   # continue a thread
+ask-up -continue cns_1a2b3c4d -force "..."                     # revive past its cache window
+ask-up -list                                                   # list saved consultations
+ask-up -v "question"                                           # also print token/cache usage
 ```
 
-Flags must come before the question (Go's flag parser stops at the first non-flag argument).
+Flags must come before the prompt (Go's flag parser stops at the first non-flag argument). The answer goes to stdout; the pointer line (how to continue, how long the cache stays warm) and any usage detail go to stderr, so the answer pipes cleanly.
 
-The answer is printed to stdout. The pointer line (how to continue, how long the cache stays warm) and any usage detail go to stderr, so `ask-up "..."` pipes a clean answer.
+### Composing a good consultation
+
+The upstream model gets one shot and cannot see your codebase. The quality of its answer is set entirely by how you frame the call, so do the work it cannot:
+
+- **Curate, don't dump.** Pull the few relevant snippets, not whole files. A tight brief beats a pile of context.
+- **Summarize the situation** and say what you have already tried or ruled out.
+- **Ask one specific, decidable question.**
+- Pipe it via a quoted heredoc (`<<'EOF'`) so code, quotes, and backticks pass through untouched.
 
 ## How reuse and the cache work
 

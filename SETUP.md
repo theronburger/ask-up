@@ -82,22 +82,36 @@ Merge into any existing `allow` array; do not clobber other entries.
 ## Escalating to a stronger model (ask-up)
 
 When you hit genuine uncertainty on a correctness-critical decision and a second
-opinion from a more capable model would change your answer, run `ask-up`:
+opinion from a more capable model would change your answer, run `ask-up`.
 
-    ask-up "your specific, self-contained question"
+The model you escalate to gets ONE shot and cannot see this codebase. Its answer
+is only as good as the brief you give it, so do the work it cannot:
 
-It prints the answer to stdout and a consultation id to stderr. To go back and
-forth on the same thread, continue it:
+- Curate the few relevant snippets; do not dump whole files.
+- Summarize the situation and what you have already tried or ruled out.
+- Ask one specific, decidable question.
 
-    ask-up -continue <id> "follow-up"
+Pipe the brief via a quoted heredoc so code, quotes, and backticks need no
+escaping:
 
-Reuse a consultation only when it already holds context relevant to the new
-question. If `ask-up` warns that a consultation's cache is cold, it is telling
-you reviving it re-bills the full history; start a fresh consultation unless you
-specifically need that prior context (then add -force). Do not escalate routine
-work: this is for the hard, uncertain calls, not every question.
+    ask-up <<'EOF'
+    <2-3 sentence situation summary>
+    <minimal relevant snippet(s)>
+    Question: <one clear, decidable question>
+    EOF
 
-Flags must come before the question.
+A trivial one-liner can go inline: `ask-up "..."`. It prints the answer to
+stdout and a consultation id to stderr. Continue a thread when it already holds
+relevant context:
+
+    ask-up -continue <id> <<'EOF'
+    <follow-up>
+    EOF
+
+If `ask-up` warns a consultation's cache is cold, reviving it re-bills the full
+history; start fresh unless you need that prior context (then add -force). Do
+not escalate routine work; this is for the hard, uncertain calls. Flags come
+before the prompt.
 ```
 
 ## 5. Confirm

@@ -3,14 +3,17 @@
 //
 // Usage:
 //
-//	ask-up "question"                       start a new consultation
-//	ask-up -continue cns_x "follow-up"      continue an existing one
+//	ask-up "question"                       quick one-liner
+//	ask-up <<'EOF' ...curated brief... EOF  compose a fuller prompt on stdin
+//	ask-up -continue cns_x "follow-up"      continue an existing consultation
 //	ask-up -continue cns_x -force "..."     revive one past its cache window
 //	ask-up -list                            list saved consultations
 //	ask-up -v "question"                    also print token/cache usage
 //
-// Flags must precede the question (Go's flag package stops at the first
-// non-flag argument).
+// The prompt comes from stdin when piped, otherwise from the positional
+// arguments. Piping (a quoted heredoc) is the right path for anything with
+// code, quotes, or newlines: it needs no shell escaping. Flags must precede
+// the question (Go's flag package stops at the first non-flag argument).
 package main
 
 import (
@@ -18,6 +21,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -92,10 +96,14 @@ func run(args []string) error {
 		return listCmd(st, cfg)
 	}
 
-	question := strings.TrimSpace(strings.Join(fs.Args(), " "))
-	if question == "" {
+	stdinData, err := readStdin()
+	if err != nil {
+		return fmt.Errorf("reading stdin: %w", err)
+	}
+	question, err := resolveBody(stdinData, fs.Args())
+	if err != nil {
 		usage(fs)
-		return errors.New("no question provided")
+		return err
 	}
 
 	c, err := resolveConsultation(st, cfg, *cont, *force, question)
@@ -124,6 +132,35 @@ func run(args []string) error {
 		printUsage(c, cfg, res)
 	}
 	return nil
+}
+
+// readStdin returns piped/redirected stdin. It skips an interactive terminal so
+// it never blocks waiting for input that isn't coming.
+func readStdin() (string, error) {
+	stat, err := os.Stdin.Stat()
+	if err != nil {
+		return "", nil // can't stat; treat as no stdin rather than fail
+	}
+	if stat.Mode()&os.ModeCharDevice != 0 {
+		return "", nil // interactive terminal, nothing piped
+	}
+	data, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+// resolveBody picks the prompt: piped stdin wins (the path for curated,
+// multi-line briefs), otherwise the positional arguments.
+func resolveBody(stdinData string, args []string) (string, error) {
+	if s := strings.TrimSpace(stdinData); s != "" {
+		return s, nil
+	}
+	if q := strings.TrimSpace(strings.Join(args, " ")); q != "" {
+		return q, nil
+	}
+	return "", errors.New("no prompt provided (pipe one via stdin or pass it as an argument)")
 }
 
 // resolveConsultation loads the consultation to continue (applying the warmth
